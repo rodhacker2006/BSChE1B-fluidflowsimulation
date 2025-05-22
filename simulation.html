@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>3D Fluid Pressure Drop Simulation</title>
+<style>
+  body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: linear-gradient(to bottom, #cceeff, #e0f7fa);
+    color: #003366;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+  #canvas-container {
+    flex: 2;
+    position: relative;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  #controls {
+    flex: 1;
+    padding: 20px;
+    background: #e0f7fa;
+    border-left: 2px solid #b3e0ff;
+    overflow-y: auto;
+  }
+  .control-group {
+    margin-bottom: 15px;
+  }
+  label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+  }
+  input[type="range"] {
+    width: 100%;
+  }
+  .live-value {
+    float: right;
+    font-weight: normal;
+  }
+  #results {
+    background: #ffffff;
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0 0 5px rgba(0,0,0,0.1);
+    margin-top: 20px;
+  }
+  #equations {
+    font-size: 0.9em;
+    margin-top: 10px;
+    line-height: 1.4;
+    color: #333;
+  }
+</style>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+
+<div id="controls">
+  <h2>Fluid Simulation Controls</h2>
+
+  <div class="control-group">
+    <label for="pipeLength">Pipe Length (m)
+      <span class="live-value" id="pipeLength-val">10</span>
+    </label>
+    <input type="range" id="pipeLength" min="1" max="50" step="0.5" value="10" />
+  </div>
+
+  <div class="control-group">
+    <label for="diameter">Pipe Diameter (m)
+      <span class="live-value" id="diameter-val">0.1</span>
+    </label>
+    <input type="range" id="diameter" min="0.01" max="1" step="0.01" value="0.1" />
+  </div>
+
+  <div class="control-group">
+    <label for="flowRate">Flow Rate (m³/s)
+      <span class="live-value" id="flowRate-val">0.0008</span>
+    </label>
+    <input type="range" id="flowRate" min="0.0001" max="0.01" step="0.0001" value="0.0008" />
+  </div>
+
+  <div class="control-group">
+    <label for="density">Fluid Density (kg/m³)
+      <span class="live-value" id="density-val">997</span>
+    </label>
+    <input type="range" id="density" min="500" max="2000" step="1" value="997" />
+  </div>
+
+  <div class="control-group">
+    <label for="viscosity">Viscosity (Pa·s)
+      <span class="live-value" id="viscosity-val">0.001</span>
+    </label>
+    <input type="range" id="viscosity" min="0.0001" max="0.01" step="0.0001" value="0.001" />
+  </div>
+
+  <div id="results">
+    <p><strong>Velocity (m/s):</strong> <span id="velocity">-</span></p>
+    <p><strong>Reynolds Number:</strong> <span id="reynolds">-</span></p>
+    <p><strong>Friction Factor:</strong> <span id="friction-factor">-</span></p>
+    <p><strong>Pressure Drop (Pa):</strong> <span id="pressure-drop">-</span></p>
+
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+<div id="equations">
+  <p><em>Equations Used:</em></p>
+  <p>Velocity: \( v = \frac{Q}{A} \), where \( A = \pi \frac{D^2}{4} \)</p>
+  <p>Reynolds number: \( Re = \frac{\rho v D}{\mu} \)</p>
+  <p>
+    Friction factor:
+    \[
+      f = \begin{cases} 
+        \frac{64}{Re} & \text{if } Re < 2300 \\[6pt]
+        0.3164 \cdot Re^{-0.25} & \text{if } Re \geq 2300
+      \end{cases}
+    \]
+  </p>
+  <p>Pressure drop: \( \Delta P = f \frac{L}{D} \cdot \frac{\rho v^2}{2} \)</p>
+</div>
+    
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
+<script>
+  // Get DOM elements
+  const pipeLengthSlider = document.getElementById('pipeLength');
+  const diameterSlider = document.getElementById('diameter');
+  const flowRateSlider = document.getElementById('flowRate');
+  const densitySlider = document.getElementById('density');
+  const viscositySlider = document.getElementById('viscosity');
+
+  const pipeLengthVal = document.getElementById('pipeLength-val');
+  const diameterVal = document.getElementById('diameter-val');
+  const flowRateVal = document.getElementById('flowRate-val');
+  const densityVal = document.getElementById('density-val');
+  const viscosityVal = document.getElementById('viscosity-val');
+
+  const velocitySpan = document.getElementById('velocity');
+  const reynoldsSpan = document.getElementById('reynolds');
+  const frictionFactorSpan = document.getElementById('friction-factor');
+  const pressureDropSpan = document.getElementById('pressure-drop');
+
+  // Three.js variables
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color('#cceeff');
+
+  const camera = new THREE.PerspectiveCamera(
+    60,
+    window.innerWidth * 2 / 3 / window.innerHeight,
+    0.1,
+    1000
+  );
+  camera.position.set(0, 1, 5);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth * 2 / 3, window.innerHeight);
+  document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+  // Lighting
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  scene.add(ambientLight);
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.6);
+  directionalLight.position.set(5, 10, 7);
+  scene.add(directionalLight);
+
+  // Pipe geometry and material (will be updated)
+  let pipe, pipeMaterial, pipeGeometry;
+
+  // Create a gradient material using vertex colors for pressure gradient
+  function createPipeMaterial() {
+    // Create geometry with vertex colors along length for pressure gradient
+    pipeGeometry = new THREE.CylinderGeometry(0.05, 0.05, 4, 32, 1, true);
+
+    // Map vertex colors from blue to red along height (Y)
+    const colorLow = new THREE.Color(0x0000ff); // Blue (low pressure)
+    const colorHigh = new THREE.Color(0xff0000); // Red (high pressure)
+    const positionAttribute = pipeGeometry.attributes.position;
+    const colors = [];
+
+    for (let i = 0; i < positionAttribute.count; i++) {
+      const y = positionAttribute.getY(i); // Y-position of vertex
+      const t = (y + 2) / 4; // normalize y between 0 and 1 (geometry height = 4)
+      const color = colorLow.clone().lerp(colorHigh, t);
+      colors.push(color.r, color.g, color.b);
+    }
+    pipeGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    return new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
+  }
+
+  pipeMaterial = createPipeMaterial();
+  pipe = new THREE.Mesh(pipeGeometry, pipeMaterial);
+  pipe.rotation.x = Math.PI / 2; // Align pipe horizontally
+  scene.add(pipe);
+
+  // Fluid particle class
+  class FluidParticle {
+    constructor() {
+      const radius = 0.01;
+      const geometry = new THREE.SphereGeometry(radius, 12, 12);
+      const material = new THREE.MeshStandardMaterial({ color: 0x00aaff, emissive: 0x003366 });
+      this.mesh = new THREE.Mesh(geometry, material);
+      this.reset();
+      scene.add(this.mesh);
+    }
+
+    reset() {
+      // Start at pipe entrance with random radial position inside pipe
+      this.t = Math.random() * -1; // position along pipe (negative means offscreen left)
+      this.radius = (Math.random() * 0.5 + 0.1) * currentDiameter / 2;
+      const angle = Math.random() * 2 * Math.PI;
+      this.x = this.radius * Math.cos(angle);
+      this.y = this.radius * Math.sin(angle);
+    }
+
+    update(speed) {
+      this.t += speed;
+      if (this.t > currentPipeLength) {
+        this.reset();
+      }
+      // Position inside pipe along length with radius offset
+      this.mesh.position.set(this.x, this.y, this.t - currentPipeLength / 2);
+    }
+  }
+
+  // Particles array
+  const particlesCount = 100;
+  let particles = [];
+
+  // Current parameters
+  let currentPipeLength = parseFloat(pipeLengthSlider.value);
+  let currentDiameter = parseFloat(diameterSlider.value);
+  let currentFlowRate = parseFloat(flowRateSlider.value);
+  let currentDensity = parseFloat(densitySlider.value);
+  let currentViscosity = parseFloat(viscositySlider.value);
+
+  // Function to update pipe geometry and scale
+  function updatePipeGeometry() {
+    // Remove old pipe
+    scene.remove(pipe);
+    pipeMaterial.dispose();
+    pipeGeometry.dispose();
+
+    // Create new geometry based on diameter and length
+    pipeGeometry = new THREE.CylinderGeometry(currentDiameter / 2, currentDiameter / 2, currentPipeLength, 64, 1, true);
+
+    // Vertex colors for pressure gradient (blue to red along pipe length)
+    const colorLow = new THREE.Color(0x0000ff);
+    const colorHigh = new THREE.Color(0xff0000);
+    const positionAttribute = pipeGeometry.attributes.position;
+    const colors = [];
+    for (let i = 0; i < positionAttribute.count; i++) {
+      const y = positionAttribute.getY(i);
+      const t = (y + currentPipeLength / 2) / currentPipeLength;
+      const color = colorLow.clone().lerp(colorHigh, t);
+      colors.push(color.r, color.g, color.b);
+    }
+    pipeGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+    pipeMaterial = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
+    pipe = new THREE.Mesh(pipeGeometry, pipeMaterial);
+    pipe.rotation.x = Math.PI / 2;
+    scene.add(pipe);
+  }
+
+  // Calculate results and update UI
+  function calculateResults() {
+    currentPipeLength = parseFloat(pipeLengthSlider.value);
+    currentDiameter = parseFloat(diameterSlider.value);
+    currentFlowRate = parseFloat(flowRateSlider.value);
+    currentDensity = parseFloat(densitySlider.value);
+    currentViscosity = parseFloat(viscositySlider.value);
+
+    pipeLengthVal.textContent = currentPipeLength.toFixed(2);
+    diameterVal.textContent = currentDiameter.toFixed(3);
+    flowRateVal.textContent = currentFlowRate.toFixed(5);
+    densityVal.textContent = currentDensity.toFixed(0);
+    viscosityVal.textContent = currentViscosity.toFixed(4);
+
+    // Cross-sectional area
+    const area = Math.PI * Math.pow(currentDiameter / 2, 2);
+
+    // Velocity
+    const velocity = currentFlowRate / area;
+
+    // Reynolds number
+    const Re = (currentDensity * velocity * currentDiameter) / currentViscosity;
+
+    // Friction factor (Darcy-Weisbach, smooth pipe approximation)
+    const frictionFactor = Re < 2300 ? 64 / Re : 0.3164 / Math.pow(Re, 0.25);
+
+    // Pressure drop
+    const deltaP = frictionFactor * (currentPipeLength / currentDiameter) * (currentDensity * velocity * velocity / 2);
+
+    // Update UI
+    velocitySpan.textContent = velocity.toFixed(3);
+    reynoldsSpan.textContent = Re.toFixed(0);
+    frictionFactorSpan.textContent = frictionFactor.toFixed(4);
+    pressureDropSpan.textContent = deltaP.toFixed(2);
+
+    return velocity;
+  }
+
+  // Initialize particles
+  function initParticles() {
+    // Remove existing particles
+    particles.forEach(p => scene.remove(p.mesh));
+    particles = [];
+    for (let i = 0; i < particlesCount; i++) {
+      particles.push(new FluidParticle());
+    }
+  }
+
+  // Animate fluid particles and pipe rotation
+  let lastTime = 0;
+  function animate(time = 0) {
+    const deltaTime = (time - lastTime) / 1000;
+    lastTime = time;
+
+    const velocity = calculateResults();
+
+    // Speed factor for particle movement (scaled)
+    const particleSpeed = velocity;
+
+    particles.forEach(p => p.update(particleSpeed * deltaTime));
+
+    renderer.render(scene, camera);
+    requestAnimationFrame(animate);
+  }
+
+  // Initial setup
+  updatePipeGeometry();
+  initParticles();
+  calculateResults();
+  animate();
+
+  // Event listeners for sliders
+  [pipeLengthSlider, diameterSlider, flowRateSlider, densitySlider, viscositySlider].forEach(slider => {
+    slider.addEventListener('input', () => {
+      updatePipeGeometry();
+      calculateResults();
+      initParticles(); // Reset particles for new dimensions
+    });
+  });
+
+  // Responsive canvas on resize
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth * 2 / 3 / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth * 2 / 3, window.innerHeight);
+  });
+</script>
+
+</body>
+</html>
